@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pilih Foto Anda</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen pb-24">
+  <!-- Header Navbar -->
+  <header class="bg-white border-b sticky top-0 z-10 px-4 py-3 shadow-sm flex justify-between items-center">
+    <div>
+      <h1 class="font-bold text-gray-800 text-lg">Pilih Foto Pilihan Anda</h1>
+      <p class="text-xs text-gray-500">Klik pada foto untuk memilih/membatalkan.</p>
+    </div>
+    <div class="text-right">
+      <span class="text-xs text-gray-500 block">Kuota Pilihan</span>
+      <span id="counter" class="font-bold text-blue-600 text-sm">0 / 0</span>
+    </div>
+  </header>
+
+  <!-- Gallery Container -->
+  <main class="max-w-6xl mx-auto p-4">
+    <div id="loading" class="text-center py-12 text-gray-500">Memuat foto dari Google Drive...</div>
+    <div id="errorMsg" class="hidden text-center py-12 text-red-500 font-medium"></div>
+    <div id="galleryGrid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
+  </main>
+
+  <!-- Sticky Bottom Bar -->
+  <div class="fixed bottom-0 left-0 right-0 bg-white border-t p-3 shadow-lg flex justify-between items-center max-w-6xl mx-auto">
+    <span id="statusText" class="text-xs text-gray-600">Pilih foto sesuai kuota.</span>
+    <button onclick="copySelectedFiles()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+      Salin Daftar Foto Selected
+    </button>
+  </div>
+
+  <script>
+    // MASUKKAN API KEY ANDA DI SINI
+    const API_KEY = 'AIzaSyCTXgw53obK4aXbWK5eWQM5SvvfIGeuYDg';
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const FOLDER_ID = urlParams.get('id');
+    const LIMIT = parseInt(urlParams.get('limit')) || 10;
+
+    let selectedFiles = [];
+
+    document.getElementById('counter').innerText = `0 / ${LIMIT}`;
+
+    async function fetchPhotos() {
+      if (!FOLDER_ID) {
+        showError('Link tidak valid. Parameter Folder ID tidak ditemukan.');
+        return;
+      }
+
+      const url = `https://www.googleapis.com/drive/v3/files?q='${FOLDER_ID}'+in+parents+and+mimeType+contains+'image/'&fields=files(id,name,thumbnailLink)&key=${API_KEY}`;
+
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.error) {
+          showError('Gagal memuat folder. Pastikan folder Drive diset "Anyone with the link".');
+          return;
+        }
+
+        if (data.files.length === 0) {
+          showError('Folder ini kosong atau tidak berisi file gambar.');
+          return;
+        }
+
+        document.getElementById('loading').classList.add('hidden');
+        renderGallery(data.files);
+      } catch (err) {
+        showError('Terjadi kesalahan koneksi ke server.');
+      }
+    }
+
+    function renderGallery(files) {
+      const grid = document.getElementById('galleryGrid');
+      grid.innerHTML = '';
+
+      files.forEach((file) => {
+        // Mengubah resolusi thumbnail agar lebih jelas (s400)
+        const highResThumb = file.thumbnailLink ? file.thumbnailLink.replace(/=s\d+/, '=s400') : '';
+
+        const card = document.createElement('div');
+        card.className = 'relative group border-2 border-transparent rounded-lg overflow-hidden bg-gray-200 cursor-pointer transition';
+        card.id = `file-${file.id}`;
+
+        card.innerHTML = `
+          <img src="${highResThumb}" alt="${file.name}" class="w-full h-36 sm:h-44 object-cover" />
+          <div class="p-1.5 bg-white text-center">
+            <p class="text-[10px] text-gray-600 truncate">${file.name}</p>
+          </div>
+          <div class="overlay absolute inset-0 bg-blue-600/30 hidden items-center justify-center">
+            <span class="bg-blue-600 text-white rounded-full p-1 text-xs">✓ Selected</span>
+          </div>
+        `;
+
+        card.onclick = () => toggleSelect(file.name, file.id);
+        grid.appendChild(card);
+      });
+    }
+
+    function toggleSelect(fileName, fileId) {
+      const card = document.getElementById(`file-${fileId}`);
+      const overlay = card.querySelector('.overlay');
+      const index = selectedFiles.indexOf(fileName);
+
+      if (index > -1) {
+        // Batalkan pilihan
+        selectedFiles.splice(index, 1);
+        card.classList.remove('border-blue-600');
+        overlay.classList.add('hidden');
+        overlay.classList.remove('flex');
+      } else {
+        // Batasi kuota
+        if (selectedFiles.length >= LIMIT) {
+          alert(`Batas maksimum pilihan Anda adalah ${LIMIT} foto!`);
+          return;
+        }
+        selectedFiles.push(fileName);
+        card.classList.add('border-blue-600');
+        overlay.classList.remove('hidden');
+        overlay.classList.add('flex');
+      }
+
+      document.getElementById('counter').innerText = `${selectedFiles.length} / ${LIMIT}`;
+    }
+
+    function copySelectedFiles() {
+      if (selectedFiles.length === 0) {
+        alert('Anda belum memilih foto apapun.');
+        return;
+      }
+
+      const formattedText = `Halo Kak, berikut daftar foto yang saya pilih (${selectedFiles.length}/${LIMIT} foto):\n\n` + 
+        selectedFiles.map((name, i) => `${i + 1}. ${name}`).join('\n');
+
+      navigator.clipboard.writeText(formattedText);
+      alert('Daftar nama foto berhasil disalin! Tinggal paste di chat WA fotografer Anda.');
+    }
+
+    function showError(msg) {
+      document.getElementById('loading').classList.add('hidden');
+      const errBox = document.getElementById('errorMsg');
+      errBox.innerText = msg;
+      errBox.classList.remove('hidden');
+    }
+
+    fetchPhotos();
+  </script>
+</body>
+</html>
