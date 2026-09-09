@@ -11,7 +11,7 @@
   <header class="bg-white border-b sticky top-0 z-10 px-4 py-3 shadow-sm flex justify-between items-center">
     <div>
       <h1 class="font-bold text-gray-800 text-lg">Pilih Foto Pilihan Anda</h1>
-      <p class="text-xs text-gray-500">Klik pada foto untuk memilih/membatalkan.</p>
+      <p class="text-xs text-gray-500">Klik ikon zoom untuk preview, klik card untuk memilih.</p>
     </div>
     <div class="text-right">
       <span class="text-xs text-gray-500 block">Kuota Pilihan</span>
@@ -21,17 +21,38 @@
 
   <!-- Gallery Container -->
   <main class="max-w-6xl mx-auto p-4">
-    <div id="loading" class="text-center py-12 text-gray-500">Memuat foto dari Google Drive...</div>
+    <div id="loading" class="text-center py-12 text-gray-500 font-medium">Memuat foto dari Google Drive...</div>
     <div id="errorMsg" class="hidden text-center py-12 text-red-500 font-medium"></div>
     <div id="galleryGrid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
   </main>
 
   <!-- Sticky Bottom Bar -->
-  <div class="fixed bottom-0 left-0 right-0 bg-white border-t p-3 shadow-lg flex justify-between items-center max-w-6xl mx-auto">
+  <div class="fixed bottom-0 left-0 right-0 bg-white border-t p-3 shadow-lg flex justify-between items-center max-w-6xl mx-auto z-10">
     <span id="statusText" class="text-xs text-gray-600">Pilih foto sesuai kuota.</span>
     <button onclick="copySelectedFiles()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
       Salin Daftar Foto Selected
     </button>
+  </div>
+
+  <!-- MODAL PREVIEW (LIGHTBOX) -->
+  <div id="previewModal" class="fixed inset-0 z-50 bg-black/90 hidden flex-col items-center justify-between p-4">
+    <!-- Modal Header / Close Button -->
+    <div class="w-full max-w-4xl flex justify-between items-center text-white">
+      <span id="modalFileName" class="text-sm font-medium truncate max-w-[200px] sm:max-w-md"></span>
+      <button onclick="closePreview()" class="text-white bg-white/20 hover:bg-white/40 rounded-full w-8 h-8 flex items-center justify-center font-bold">✕</button>
+    </div>
+
+    <!-- Image Container (Tampilan Foto Besar) -->
+    <div class="relative flex-1 flex items-center justify-center w-full max-w-4xl my-2">
+      <img id="modalImage" src="" alt="Preview" class="max-h-[75vh] max-w-full object-contain rounded-lg shadow-2xl" />
+    </div>
+
+    <!-- Modal Footer / Action Button -->
+    <div class="w-full max-w-4xl flex justify-center items-center gap-4">
+      <button id="modalSelectBtn" onclick="toggleSelectFromModal()" class="px-6 py-2.5 rounded-full font-medium text-sm transition flex items-center gap-2 shadow-lg">
+        <!-- Text & Status di-render via JS -->
+      </button>
+    </div>
   </div>
 
   <script>
@@ -43,6 +64,7 @@
     const LIMIT = parseInt(urlParams.get('limit')) || 10;
 
     let selectedFiles = [];
+    let currentPreviewFile = null;
 
     document.getElementById('counter').innerText = `0 / ${LIMIT}`;
 
@@ -52,24 +74,44 @@
         return;
       }
 
-      const url = `https://www.googleapis.com/drive/v3/files?q='${FOLDER_ID}'+in+parents+and+mimeType+contains+'image/'&fields=files(id,name,thumbnailLink)&key=${API_KEY}`;
+      let allFiles = [];
+      let nextPageToken = null;
+      const loadingEl = document.getElementById('loading');
 
       try {
-        const response = await fetch(url);
-        const data = await response.json();
+        // Paginasi: Ambil terus menerus sampai semua file terambil
+        do {
+          let url = `https://www.googleapis.com/drive/v3/files?q='${FOLDER_ID}'+in+parents+and+mimeType+contains+'image/'&pageSize=100&fields=nextPageToken,files(id,name,thumbnailLink)&key=${API_KEY}`;
 
-        if (data.error) {
-          showError('Gagal memuat folder. Pastikan folder Drive diset "Anyone with the link".');
-          return;
-        }
+          if (nextPageToken) {
+            url += `&pageToken=${nextPageToken}`;
+          }
 
-        if (data.files.length === 0) {
+          const response = await fetch(url);
+          const data = await response.json();
+
+          if (data.error) {
+            showError('Gagal memuat folder. Pastikan folder Drive diset "Anyone with the link".');
+            return;
+          }
+
+          if (data.files && data.files.length > 0) {
+            allFiles = allFiles.concat(data.files);
+            loadingEl.innerText = `Memuat foto dari Google Drive... (${allFiles.length} foto ditemukan)`;
+          }
+
+          nextPageToken = data.nextPageToken;
+
+        } while (nextPageToken);
+
+        if (allFiles.length === 0) {
           showError('Folder ini kosong atau tidak berisi file gambar.');
           return;
         }
 
-        document.getElementById('loading').classList.add('hidden');
-        renderGallery(data.files);
+        loadingEl.classList.add('hidden');
+        renderGallery(allFiles);
+
       } catch (err) {
         showError('Terjadi kesalahan koneksi ke server.');
       }
@@ -80,41 +122,97 @@
       grid.innerHTML = '';
 
       files.forEach((file) => {
-        // Mengubah resolusi thumbnail agar lebih jelas (s400)
-        const highResThumb = file.thumbnailLink ? file.thumbnailLink.replace(/=s\d+/, '=s400') : '';
+        // s400 untuk Thumbnail Grid (Ringan), s1600 untuk Preview (Tajam)
+        const thumbUrl = file.thumbnailLink ? file.thumbnailLink.replace(/=s\d+/, '=s400') : '';
+        const previewUrl = file.thumbnailLink ? file.thumbnailLink.replace(/=s\d+/, '=s1600') : '';
 
         const card = document.createElement('div');
         card.className = 'relative group border-2 border-transparent rounded-lg overflow-hidden bg-gray-200 cursor-pointer transition';
         card.id = `file-${file.id}`;
 
         card.innerHTML = `
-          <img src="${highResThumb}" alt="${file.name}" class="w-full h-36 sm:h-44 object-cover" />
+          <img src="${thumbUrl}" alt="${file.name}" class="w-full h-36 sm:h-44 object-cover" loading="lazy" />
+          
+          <!-- Tombol Preview (Kaca Pembesar) -->
+          <button onclick="openPreview(event, '${file.name}', '${file.id}', '${previewUrl}')" class="absolute top-2 right-2 bg-black/60 hover:bg-black text-white p-1.5 rounded-full text-xs transition z-10" title="Zoom/Preview">
+            🔍
+          </button>
+
           <div class="p-1.5 bg-white text-center">
             <p class="text-[10px] text-gray-600 truncate">${file.name}</p>
           </div>
+
           <div class="overlay absolute inset-0 bg-blue-600/30 hidden items-center justify-center">
-            <span class="bg-blue-600 text-white rounded-full p-1 text-xs">✓ Selected</span>
+            <span class="bg-blue-600 text-white rounded-full p-1 text-xs font-semibold">✓ Selected</span>
           </div>
         `;
 
-        card.onclick = () => toggleSelect(file.name, file.id);
+        // Klik gambar untuk toggle select, kecuali tombol preview
+        card.onclick = (e) => {
+          if (!e.target.closest('button')) {
+            toggleSelect(file.name, file.id);
+          }
+        };
+
         grid.appendChild(card);
       });
     }
 
+    // --- FUNGSI PREVIEW MODAL ---
+    function openPreview(event, fileName, fileId, previewUrl) {
+      event.stopPropagation();
+      currentPreviewFile = { name: fileName, id: fileId };
+
+      document.getElementById('modalFileName').innerText = fileName;
+      document.getElementById('modalImage').src = previewUrl;
+
+      updateModalBtnUI();
+      document.getElementById('previewModal').classList.remove('hidden');
+      document.getElementById('previewModal').classList.add('flex');
+    }
+
+    function closePreview() {
+      document.getElementById('previewModal').classList.add('hidden');
+      document.getElementById('previewModal').classList.remove('flex');
+      currentPreviewFile = null;
+      document.getElementById('modalImage').src = ""; // Bersihkan image
+    }
+
+    function toggleSelectFromModal() {
+      if (!currentPreviewFile) return;
+      toggleSelect(currentPreviewFile.name, currentPreviewFile.id);
+      updateModalBtnUI();
+    }
+
+    function updateModalBtnUI() {
+      if (!currentPreviewFile) return;
+
+      const btn = document.getElementById('modalSelectBtn');
+      const isSelected = selectedFiles.includes(currentPreviewFile.name);
+
+      if (isSelected) {
+        btn.className = "px-6 py-2.5 rounded-full font-medium text-sm transition flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white shadow-lg";
+        btn.innerHTML = "❌ Batalkan Pilihan Foto Ini";
+      } else {
+        btn.className = "px-6 py-2.5 rounded-full font-medium text-sm transition flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white shadow-lg";
+        btn.innerHTML = "✓ Pilih Foto Ini";
+      }
+    }
+
+    // --- LOGIKA SELEKSI ---
     function toggleSelect(fileName, fileId) {
       const card = document.getElementById(`file-${fileId}`);
       const overlay = card.querySelector('.overlay');
       const index = selectedFiles.indexOf(fileName);
 
       if (index > -1) {
-        // Batalkan pilihan
+        // Batal pilih
         selectedFiles.splice(index, 1);
         card.classList.remove('border-blue-600');
         overlay.classList.add('hidden');
         overlay.classList.remove('flex');
       } else {
-        // Batasi kuota
+        // Cek limit
         if (selectedFiles.length >= LIMIT) {
           alert(`Batas maksimum pilihan Anda adalah ${LIMIT} foto!`);
           return;
